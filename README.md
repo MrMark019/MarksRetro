@@ -80,12 +80,16 @@ cd bridge && go build -o retrobridge.exe .
 
 ## Attribution
 
-Fork of **micro-agent** (retro-agent project), © 2025 micro-agent
-contributors, MIT licensed. Original repository:
-`<paste upstream repo URL here>` — v0.1.0 winxp build, artifact
-SHA-256 `3be086f1e18a4dddcfb8f1fc4e31bcc7c7e95b76061ec6ac0f604258d1ea856f`.
-Toolchain: Zig 0.15.2 (MIT), Go 1.10.8 (BSD-3). CA bundle: Mozilla CA
-certificates (MPL 2.0), shipped as `ca-bundle.crt`.
+Fork of **retro-agent** (micro-agent), © 2025 micro-agent contributors, MIT licensed.
 
-*The original project's canonical URL should be filled in above from your
-download record before publishing, so the attribution link is exact.*
+- Upstream: https://github.com/benmaster82/retro-agent
+- Base version: [v0.1.0 release](https://github.com/benmaster82/retro-agent/releases/tag/v0.1.0),
+  asset `retro-agent-v0.1.0-winxp-x86.zip`
+- Verified artifact SHA-256: `3be086f1e18a4dddcfb8f1fc4e31bcc7c7e95b76061ec6ac0f604258d1ea856f`
+  (re-downloaded 2026-11-13 and matched byte-for-byte)
+- `upstream-pristine/` in this repo contains the untouched sources from that zip,
+  so every fork change is diffable against the original.
+
+Toolchain: Zig 0.15.2 (MIT), Go 1.10.8 (BSD-3 — last Go release supporting
+Windows XP). CA bundle: Mozilla CA certificates (MPL 2.0), shipped as
+`ca-bundle.crt`.
