@@ -1,4 +1,4 @@
-RETRO 单机 AI Agent 便携包 v3.4  (XP SP3 / 32 位 Windows 专用)
+RETRO 单机 AI Agent 便携包 v3.6c  (XP SP3 / 32 位 Windows 专用)
 ================================================================
 
 自包含文件夹:拷到任意位置都能用,不依赖大U盘其他内容。
@@ -15,7 +15,7 @@ RETRO 单机 AI Agent 便携包 v3.4  (XP SP3 / 32 位 Windows 专用)
     require_approval 执行命令前是否人工确认
 
 ★ 运行时改配置:不用碰 retro.ini,会话里直接敲命令(自动持久化):
-    /upstream <url>  热切服务商(写 upstream.txt,重启仍生效)
+    /upstream <url>  热切服务商(双写 settings.txt + upstream.txt,重启仍生效)
     /model /api /think /context /maxtok /stream 等(写 settings.txt)
     手工重置:删 settings.txt / upstream.txt 即回到 retro.ini 默认。
 
@@ -45,11 +45,13 @@ RETRO 单机 AI Agent 便携包 v3.4  (XP SP3 / 32 位 Windows 专用)
      /usage          上一轮 token 用量与窗口占用
      /think high     思考强度 off/low/medium/high(qwen/deepseek 新模型有效)
      /stream off     关逐字流式(极慢网络时用)
-     /upstream <url> 换服务商(OpenAI 兼容端点)
+     /upstream <url> 换服务商(OpenAI 兼容端点);重启后自动重新生效,
+                      启动横幅 Upstream 行显示的就是桥的真实目标
      /key <新key>    换密钥(即时生效并重写 key.txt)
      /color on|off  彩色/纯黑底白字(默认纯黑底白字,老控制台更干净)
      /thinking brief|full  思考折叠(默认brief一行摘要)/expand 展开上轮
-     ESC 或第一次 Ctrl+C 打断当前回复(不退出程序,continue 继续;空闲时 Ctrl+C 照常退出)
+     ESC 或 Ctrl+C 打断当前回复(不退出程序,continue 继续);空闲时连按
+     两次 Ctrl+C(2.5秒内)才退出;点窗口X随时退出
      工具轮数上限 10→30,触顶会明确提示(不再无声中断)
      /api responses 或 anthropic 可切协议格式(经 /upstream 指向对应端点)
      max_tokens 超过当前端点实际上限时,自动按服务商报错钳制并重试,无需手改
@@ -61,3 +63,4 @@ RETRO 单机 AI Agent 便携包 v3.4  (XP SP3 / 32 位 Windows 专用)
   - 时钟错乱(CMOS 电池)会导致 TLS 失败,启动时自动检测并尝试 NTP 同步;
   - 思考内容/流式文字需要桥在线(默认即满足);若服务商拒绝思考参数会自动降级重试;
   - 图片走 base64 随消息发送,老机器内存小注意别连发大图;历史压缩会丢弃旧图片载荷。
+

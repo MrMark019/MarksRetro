@@ -99,6 +99,9 @@ del "%DIR%config.json" >nul 2>nul
 >> "%DIR%config.json" echo }
 echo config.json written >> "%LOG%"
 
+rem Fork v3.6c: /upstream persists to upstream.txt next to the bridge exe;
+rem show THAT value (retro.ini below can be stale). Single-line if = XP-safe.
+if exist "%DIR%upstream.txt" set /p UPSTREAM=<"%DIR%upstream.txt"
 echo   model: %MODEL%   bridge: %BASEURL%   upstream: %UPSTREAM%
 echo.
 

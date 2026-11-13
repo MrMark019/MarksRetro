@@ -1,5 +1,19 @@
 # Changelog — MarksRetro
 
+## v3.6c (2026-11-13)
+- Fixed Ctrl+C: v3.6 used wrong event codes (CTRL_C_EVENT is 0, not 1), so
+  Ctrl+C never interrupted a turn and always killed the agent - the field
+  "打断没生效" report. Now Ctrl+C/ESC interrupt the current reply; window
+  close (CTRL_CLOSE_EVENT=2) terminates again; a lone Ctrl+C while idle is
+  swallowed, pressing it twice within ~2.5s quits.
+- Fixed /upstream persistence across sessions: a retrobridge window can
+  survive the agent window close and agent.bat reuses it without re-reading
+  upstream.txt, so the switch silently reverted on next start ("invalid
+  api key"). The choice is now persisted agent-side in settings.txt and
+  re-applied to the live bridge at startup (heal).
+- Banner + /info now show the bridge's ACTUAL upstream URL, not just the
+  localhost endpoint; agent.bat banner prefers upstream.txt over retro.ini.
+
 ## v3.6b (2026-11-13)
 - Runtime OS detection (RtlGetVersion + env + computer name) injected into the
   system prompt; banner/title/defaults de-hardcoded from "Windows XP"

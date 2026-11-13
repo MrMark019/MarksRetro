@@ -132,6 +132,10 @@ pub const Config = struct {
     transport_api_key: []const u8 = "",
     transport_api_model: []const u8 = "",
     transport_api_base_url: []const u8 = "http://localhost:11434",
+    // Fork v3.6c: last /upstream choice, persisted in settings.txt so the
+    // agent can re-apply it to the bridge on startup (a stale retrobridge
+    // that survived the previous window close never re-reads upstream.txt).
+    upstream: []const u8 = "",
     // Fork patch: optional generation limits (0 = omit from request)
     transport_api_max_tokens: u32 = 0,
     transport_api_context_window: u32 = 0,
@@ -466,6 +470,12 @@ pub const Config = struct {
             } else if (std.ascii.eqlIgnoreCase(key, "color")) {
                 if (std.ascii.eqlIgnoreCase(val, "on") or std.ascii.eqlIgnoreCase(val, "true") or std.ascii.eqlIgnoreCase(val, "1")) self.console_color = true;
                 if (std.ascii.eqlIgnoreCase(val, "off") or std.ascii.eqlIgnoreCase(val, "false") or std.ascii.eqlIgnoreCase(val, "0")) self.console_color = false;
+            } else if (std.ascii.eqlIgnoreCase(key, "upstream")) {
+                // Fork v3.6c: /upstream persistence, agent-side (belt for the
+                // bridge's upstream.txt). Must look like a URL or it is junk.
+                if (std.mem.startsWith(u8, val, "http://") or std.mem.startsWith(u8, val, "https://")) {
+                    self.upstream = self.dupeAndOwn(val) catch continue;
+                }
             }
         }
     }
@@ -487,6 +497,7 @@ pub const Config = struct {
         try w.print("max_tool_rounds={d}\n", .{self.max_tool_rounds});
         try w.print("thinking_display={s}\n", .{@tagName(self.thinking_display)});
         try w.print("color={s}\n", .{if (self.console_color) "on" else "off"});
+        if (self.upstream.len > 0) try w.print("upstream={s}\n", .{self.upstream});
 
         const file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch return;
         defer file.close();

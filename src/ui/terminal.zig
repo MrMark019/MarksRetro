@@ -72,6 +72,7 @@ extern "kernel32" fn GetFileType(hFile: HANDLE) callconv(.winapi) DWORD;
 extern "kernel32" fn PeekConsoleInputW(hConsoleInput: HANDLE, lpBuffer: [*]u8, nLength: DWORD, lpNumberOfEventsRead: *DWORD) callconv(.winapi) BOOL;
 extern "kernel32" fn ReadConsoleInputW(hConsoleInput: HANDLE, lpBuffer: [*]u8, nLength: DWORD, lpNumberOfEventsRead: *DWORD) callconv(.winapi) BOOL;
 extern "kernel32" fn SetConsoleCtrlHandler(handlerRoutine: ?*const fn (DWORD) callconv(.winapi) BOOL, add: BOOL) callconv(.winapi) BOOL;
+extern "kernel32" fn GetTickCount() callconv(.winapi) DWORD; // ms since boot, wraps ~49 days
 
 const STD_INPUT_HANDLE: DWORD = @bitCast(@as(i32, -10));
 const FILE_TYPE_CHAR: DWORD = 2;
@@ -83,16 +84,29 @@ var g_color: bool = false; // false = plain black-bg white-text everywhere
 var g_think_brief: bool = true; // thinking collapsed by default
 var g_busy = std.atomic.Value(bool).init(false); // a turn is in flight
 var g_stop = std.atomic.Value(bool).init(false); // user asked to stop it
+var g_ctrl_tick = std.atomic.Value(u32).init(0); // last idle Ctrl+C (double-press quit)
 var console_in_handle: ?HANDLE = null; // null when stdin is redirected
 
 fn ctrlHandler(ctl_type: DWORD) callconv(.winapi) BOOL {
-    // CTRL_C_EVENT = 1, CTRL_BREAK_EVENT = 2
-    if (ctl_type == 1 or ctl_type == 2) {
+    // Win32 truth: CTRL_C_EVENT = 0, CTRL_BREAK_EVENT = 1,
+    // CTRL_CLOSE_EVENT = 2 (logoff 3 / shutdown 4).
+    // Fork v3.6c: v3.6 had this mapping wrong (C=1, BREAK=2), so a real
+    // Ctrl+C (0) fell through to "return 0" and the default handler KILLED
+    // the agent mid-turn - that is the "Ctrl+C exits instead of
+    // interrupting" field bug. Window-close (2) still terminates.
+    if (ctl_type == 0 or ctl_type == 1) {
         if (g_busy.load(.acquire)) {
             g_stop.store(true, .release); // swallow: interrupt the turn, stay alive
             return 1;
         }
-        return 0; // idle: default behavior (terminate) - Ctrl+C still quits
+        // Idle: swallow a single Ctrl+C (cmd's "Terminate batch job Y/N"
+        // can deliver stray events after an interrupt). Press it twice
+        // within ~2.5s (or use /quit) and the second one quits for real.
+        const now = GetTickCount();
+        const prev = g_ctrl_tick.swap(now, .acq_rel);
+        const elapsed: i32 = @bitCast(now -% prev);
+        if (elapsed < 2500) return 0;
+        return 1;
     }
     return 0;
 }
@@ -547,7 +561,7 @@ fn drawSeparator(stdout: std.fs.File, width: usize) !void {
 // ─────────────────────────────────────────────
 // Banner
 // ─────────────────────────────────────────────
-fn drawBanner(stdout: std.fs.File, cfg: *config.Config, ag: *agent_mod.Agent) !void {
+fn drawBanner(stdout: std.fs.File, allocator: std.mem.Allocator, cfg: *config.Config, ag: *agent_mod.Agent) !void {
     const w: usize = 62;
     var buf: [512]u8 = undefined;
 
@@ -574,6 +588,13 @@ fn drawBanner(stdout: std.fs.File, cfg: *config.Config, ag: *agent_mod.Agent) !v
     drawBoxLine(stdout, std.fmt.bufPrint(&buf, "API      {s}  ({s})", .{ @tagName(cfg.transport_api_style), if (cfg.transport_api_stream) "stream" else "batch" }) catch "API ?", w, CLR_INFO) catch {};
     drawBoxLine(stdout, std.fmt.bufPrint(&buf, "Endpoint {s}", .{cfg.transport_api_base_url}) catch "Endpoint ?", w, CLR_DIM) catch {};
 
+    // Fork v3.6c: show the bridge's ACTUAL upstream so a switch is visible
+    // right at startup (localhost endpoint alone was confusing in the field).
+    if (bridgeUpstream(allocator, cfg)) |u| {
+        defer allocator.free(u);
+        drawBoxLine(stdout, std.fmt.bufPrint(&buf, "Upstream {s}", .{u}) catch "Upstream ?", w, CLR_DIM) catch {};
+    }
+
     const mode_txt = switch (ag.mode_op) {
         .build => "build (full access)",
         .plan => "plan  (read-only)",
@@ -590,7 +611,7 @@ fn drawBanner(stdout: std.fs.File, cfg: *config.Config, ag: *agent_mod.Agent) !v
     drawBoxLine(stdout, std.fmt.bufPrint(&buf, "Approval {s}", .{approval_str}) catch "Approval ?", w, CLR_DIM) catch {};
 
     // Fork v3.6: show look/thinking mode at a glance
-    drawBoxLine(stdout, std.fmt.bufPrint(&buf, "UI       {s}  thinking {s}  (ESC stops a reply)", .{
+    drawBoxLine(stdout, std.fmt.bufPrint(&buf, "UI       {s}  thinking {s}  (ESC/Ctrl+C stops a reply)", .{
         if (g_color) "color" else "mono",
         if (g_think_brief) "brief" else "full",
     }) catch "UI ?", w, CLR_DIM) catch {};
@@ -643,7 +664,7 @@ fn drawHelp(stdout: std.fs.File) !void {
         .{ "/thinking brief|full", "collapse/expand thinking block" },
         .{ "/expand", "show last thinking in full" },
         .{ "/color on|off", "color scheme vs plain black/white" },
-        .{ "ESC / Ctrl+C", "stop the current reply (send continue later)" },
+        .{ "ESC / Ctrl+C", "stop current reply (2x Ctrl+C when idle quits)" },
         .{ "/sessions [n]", "list / resume saved sessions" },
         .{ "/save <name>", "save conversation under name" },
         .{ "/new", "start a fresh conversation" },
@@ -723,7 +744,7 @@ fn drawToolsList(stdout: std.fs.File, ag: *agent_mod.Agent) !void {
 // ─────────────────────────────────────────────
 // Info screen
 // ─────────────────────────────────────────────
-fn drawInfo(stdout: std.fs.File, ag: *agent_mod.Agent, cfg: *config.Config) !void {
+fn drawInfo(stdout: std.fs.File, allocator: std.mem.Allocator, ag: *agent_mod.Agent, cfg: *config.Config) !void {
     try stdout.writeAll("\n");
     setColor(CLR_HEADER);
     try stdout.writeAll("  CONFIGURATION\n");
@@ -750,6 +771,10 @@ fn drawInfo(stdout: std.fs.File, ag: *agent_mod.Agent, cfg: *config.Config) !voi
     try line(stdout, "Streaming", if (cfg.transport_api_stream) "on" else "off", CLR_TEXT);
     try line(stdout, "Thinking", cfg.transport_thinking.toString(), CLR_TEXT);
     try line(stdout, "Endpoint", cfg.transport_api_base_url, CLR_DIM);
+    if (bridgeUpstream(allocator, cfg)) |u| {
+        defer allocator.free(u);
+        try line(stdout, "Upstream", u, CLR_DIM);
+    }
     try line(stdout, "Mode", if (ag.mode_op == .plan) "plan (read-only)" else "build (full)", if (ag.mode_op == .plan) CLR_WARN else CLR_INFO);
     try line(stdout, "Agent", cfg.agent_name, CLR_TEXT);
 
@@ -1083,6 +1108,30 @@ fn bridgeUpstream(allocator: std.mem.Allocator, cfg: *config.Config) ?[]const u8
     return null;
 }
 
+/// Fork v3.6c: re-apply the persisted /upstream choice to the live bridge.
+/// Scenario from the field: the user closes the agent window (the minimized
+/// retrobridge window survives), runs agent.bat again; the "-check" sees the
+/// old bridge and reuses it - upstream.txt was never re-read, so requests
+/// still go to the previous provider while key.txt has the new key:
+/// "invalid api key" on the second start. Healing here fixes that class.
+fn healUpstream(allocator: std.mem.Allocator, cfg: *config.Config, stdout: std.fs.File) void {
+    const transport = @import("../transport/transport.zig");
+    if (cfg.upstream.len == 0) return;
+    const cur = bridgeUpstream(allocator, cfg) orelse return; // no bridge / old bridge
+    defer allocator.free(cur);
+    const want = std.mem.trimRight(u8, cfg.upstream, "/");
+    if (std.mem.eql(u8, cur, want)) return; // already right
+    if (transport.adminUpstream(allocator, cfg, want)) |res| {
+        allocator.free(res.detail);
+        if (res.ok) {
+            setColor(CLR_DIM);
+            stdout.writeAll("  (upstream re-applied from saved settings)\n") catch {};
+            resetColor();
+            freeCachedModels(allocator);
+        }
+    } else |_| {}
+}
+
 fn saveModelCache(allocator: std.mem.Allocator, upstream: []const u8, models: []const []const u8) void {
     if (models.len == 0) return;
     var out = std.ArrayList(u8).initCapacity(allocator, 4096) catch return;
@@ -1320,6 +1369,9 @@ pub fn run(allocator: std.mem.Allocator, cfg: *config.Config) !void {
     initConsoleLook();
     initInterruptPlumbing(std.fs.File.stdin().handle);
 
+    // Fork v3.6c: make sure a reused/stale bridge serves the last /upstream
+    healUpstream(allocator, cfg, stdout);
+
     var ag = try agent_mod.Agent.init(allocator, cfg);
     defer ag.deinit();
 
@@ -1328,7 +1380,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: *config.Config) !void {
     defer render.last_thinking.deinit(allocator);
     const sink = renderSink(&render);
 
-    try drawBanner(stdout, cfg, &ag);
+    try drawBanner(stdout, allocator, cfg, &ag);
 
     var input_buf: [4096]u8 = undefined;
     var msg_buf: [4096]u8 = undefined;
@@ -1501,7 +1553,7 @@ fn handleCommand(
         return true;
     }
     if (std.mem.eql(u8, cmd, "/info")) {
-        try drawInfo(stdout, ag, cfg);
+        try drawInfo(stdout, allocator, ag, cfg);
         return true;
     }
     if (std.mem.eql(u8, cmd, "/tools")) {
@@ -1731,7 +1783,13 @@ fn handleCommand(
                 defer allocator.free(res.detail);
                 setColor(if (res.ok) CLR_INFO else CLR_ERR);
                 if (res.ok) {
-                    try stdout.writeAll("\n  upstream switched (persisted to upstream.txt).\n  model list refreshed for new provider.\n\n");
+                    // Fork v3.6c: persist agent-side too. The bridge keeps
+                    // its own upstream.txt, but a stale bridge process that
+                    // survives the window close never re-reads it - the
+                    // settings.txt copy lets startup heal it.
+                    cfg.upstream = cfg.dupeAndOwn(a) catch cfg.upstream;
+                    cfg.saveSettingsFile("settings.txt") catch {};
+                    try stdout.writeAll("\n  upstream switched (persisted: settings.txt + upstream.txt).\n  model list refreshed for new provider.\n\n");
                     freeCachedModels(allocator);
                     // warm the new provider's list now (with fallbacks)
                     var warm_note: []const u8 = "";
