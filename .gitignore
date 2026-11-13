@@ -1,0 +1,25 @@
+# build
+.zig-cache/
+zig-out/
+*.obj
+*.exe
+*.pdb
+!dist/RETRO-X86/*.exe
+
+# runtime artifacts (never commit)
+key.txt
+*.key
+settings.txt
+upstream.txt
+models.cache.txt
+sessions/
+config.json
+agent.log
+bridge.log
+check.log
+agent-debug.log
+
+# scene/forensics data
+win7-scene*/
+*.7z
+*.tar

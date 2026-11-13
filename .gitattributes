@@ -1,0 +1,9 @@
+*.bat  eol=crlf
+*.ps1  eol=crlf
+*.zig  text eol=lf
+*.go   text eol=lf
+*.crt  -text
+*.exe  -text
+dist/RETRO-X86/README.txt  -text
+dist/RETRO-X86/retro.ini   -text
+dist/RETRO-X86/models.txt  -text

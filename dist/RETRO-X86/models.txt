@@ -1,0 +1,5 @@
+; agent.bat 2 就用编号 2 的模型(编号后仍可带其它参数透传)
+1=qwen3.8-flash
+2=deepseek-v4.1-flash
+3=qwen3.8-max
+4=qwen3-vl-plus
