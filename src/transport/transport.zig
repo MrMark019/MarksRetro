@@ -1442,6 +1442,10 @@ pub fn freeModels(allocator: std.mem.Allocator, models: []const []const u8) void
 
 pub const AdminResult = struct { ok: bool, detail: []const u8 };
 
+/// v3.6d CONTRACT: .detail is ALWAYS allocator-owned. Every caller does an
+/// unconditional allocator.free(res.detail); returning static strings caused
+/// a "panic: Invalid free" at the startup banner whenever the bridge was
+/// down (v3.6c field crash). Failures now dupe the message (OOM -> error).
 pub fn adminUpstream(allocator: std.mem.Allocator, cfg: *config.Config, new_upstream: ?[]const u8) !AdminResult {
     const url = try std.fmt.allocPrint(allocator, "{s}/__admin/upstream", .{cfg.transport_api_base_url});
     defer allocator.free(url);
@@ -1449,24 +1453,34 @@ pub fn adminUpstream(allocator: std.mem.Allocator, cfg: *config.Config, new_upst
     if (new_upstream) |nu| {
         var client = std.http.Client{ .allocator = allocator };
         defer client.deinit();
-        var opened = openRequest(allocator, &client, .POST, url, nu, cfg, &.{}) catch return .{ .ok = false, .detail = "cannot reach bridge" };
+        var opened = openRequest(allocator, &client, .POST, url, nu, cfg, &.{}) catch return .{
+            .ok = false, .detail = try allocator.dupe(u8, "cannot reach bridge"),
+        };
         defer opened.req.deinit();
         var write_buf: [1024]u8 = undefined;
-        var req_body = opened.req.sendBodyUnflushed(&write_buf) catch {
-            return .{ .ok = false, .detail = "bridge send failed" };
+        var req_body = opened.req.sendBodyUnflushed(&write_buf) catch return .{
+            .ok = false, .detail = try allocator.dupe(u8, "bridge send failed"),
         };
         req_body.writer.writeAll(nu) catch {};
         req_body.end() catch {};
         opened.req.connection.?.flush() catch {};
         var redirect_buf: [4096]u8 = undefined;
-        var response = opened.req.receiveHead(&redirect_buf) catch return .{ .ok = false, .detail = "bridge no answer" };
+        var response = opened.req.receiveHead(&redirect_buf) catch return .{
+            .ok = false, .detail = try allocator.dupe(u8, "bridge no answer"),
+        };
         const status: u16 = @intFromEnum(response.head.status);
         var tb: [2048]u8 = undefined;
-        const resp_body = response.reader(&tb).allocRemaining(allocator, config_Limit64k) catch "";
-        return .{ .ok = status < 400, .detail = resp_body };
+        const resp_body = response.reader(&tb).allocRemaining(allocator, config_Limit64k) catch {
+            if (status < 400) return .{ .ok = false, .detail = try allocator.dupe(u8, "bridge answer unreadable") };
+            return .{ .ok = false, .detail = try allocator.alloc(u8, 0) };
+        };
+        if (status >= 400) return .{ .ok = false, .detail = resp_body };
+        return .{ .ok = true, .detail = resp_body };
     }
 
-    const res = httpGet(allocator, url, cfg) catch return .{ .ok = false, .detail = "cannot reach bridge" };
+    const res = httpGet(allocator, url, cfg) catch return .{
+        .ok = false, .detail = try allocator.dupe(u8, "cannot reach bridge"),
+    };
     return .{ .ok = res.status < 400, .detail = res.body };
 }
 

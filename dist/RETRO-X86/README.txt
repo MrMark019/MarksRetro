@@ -1,4 +1,4 @@
-RETRO 单机 AI Agent 便携包 v3.6c  (XP SP3 / 32 位 Windows 专用)
+RETRO 单机 AI Agent 便携包 v3.6d  (XP SP3 / 32 位 Windows 专用)
 ================================================================
 
 自包含文件夹:拷到任意位置都能用,不依赖大U盘其他内容。
@@ -17,6 +17,7 @@ RETRO 单机 AI Agent 便携包 v3.6c  (XP SP3 / 32 位 Windows 专用)
 ★ 运行时改配置:不用碰 retro.ini,会话里直接敲命令(自动持久化):
     /upstream <url>  热切服务商(双写 settings.txt + upstream.txt,重启仍生效)
     /model /api /think /context /maxtok /stream 等(写 settings.txt)
+     /rounds N      工具调用轮数上限(默认30,2..100;原 max_tool_rounds 文件键)
     手工重置:删 settings.txt / upstream.txt 即回到 retro.ini 默认。
 
 文件:

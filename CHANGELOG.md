@@ -1,5 +1,13 @@
 # Changelog — MarksRetro
 
+## v3.6d (2026-11-20)
+- New `/rounds <2..100>` command: tool-call budget per reply (default 30),
+  live + persisted to settings.txt (was file-edit-only)
+- Fixed "panic: Invalid free" when starting with the bridge DOWN: the v3.6c
+  banner's Upstream lookup freed a static string on the admin-error path
+  (contract now: AdminResult.detail is always allocator-owned). Affected
+  /model, /upstream and startup-heal whenever no retrobridge was listening.
+
 ## v3.6c (2026-11-13)
 - Fixed Ctrl+C: v3.6 used wrong event codes (CTRL_C_EVENT is 0, not 1), so
   Ctrl+C never interrupted a turn and always killed the agent - the field

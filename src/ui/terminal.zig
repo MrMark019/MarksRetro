@@ -671,6 +671,7 @@ fn drawHelp(stdout: std.fs.File) !void {
         .{ "/usage", "token usage of the last turn" },
         .{ "/context <n>", "set context window (tokens)" },
         .{ "/maxtok <n>", "set max output tokens (0=auto)" },
+        .{ "/rounds <n>", "tool-call rounds per reply (2..100, default 30)" },
         .{ "/info /tools", "configuration / tools" },
         .{ "/clear", "wipe history (/new is friendlier)" },
         .{ "/quit", "exit (bridge stops too)" },
@@ -1759,6 +1760,34 @@ fn handleCommand(
         } else |_| {
             setColor(CLR_WARN);
             try stdout.writeAll("  usage: /maxtok <tokens> (0 = auto)\n\n");
+            resetColor();
+        }
+        return true;
+    }
+    // /rounds - tool-call budget per reply (same persistence as /maxtok)
+    if (std.mem.startsWith(u8, cmd, "/rounds")) {
+        const a = argAfter(cmd, 7);
+        if (a.len == 0) {
+            setColor(CLR_INFO);
+            var buf: [96]u8 = undefined;
+            try stdout.writeAll(std.fmt.bufPrint(&buf, "\n  tool rounds: {d}   (set: /rounds 2..100)\n\n", .{cfg.max_tool_rounds}) catch "\n  ?\n\n");
+            resetColor();
+        } else if (std.fmt.parseInt(u32, a, 10)) |n| {
+            if (n >= 2 and n <= 100) {
+                cfg.max_tool_rounds = n;
+                cfg.saveSettingsFile("settings.txt") catch {};
+                setColor(CLR_INFO);
+                var buf: [96]u8 = undefined;
+                try stdout.writeAll(std.fmt.bufPrint(&buf, "\n  tool rounds -> {d} (hard cap 100, applies next reply)\n\n", .{n}) catch "\n  ok\n\n");
+                resetColor();
+            } else {
+                setColor(CLR_WARN);
+                try stdout.writeAll("  range: 2..100\n\n");
+                resetColor();
+            }
+        } else |_| {
+            setColor(CLR_WARN);
+            try stdout.writeAll("  usage: /rounds <2..100>\n\n");
             resetColor();
         }
         return true;
