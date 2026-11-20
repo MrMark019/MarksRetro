@@ -1,5 +1,14 @@
 # Changelog — MarksRetro
 
+## v3.6e (2026-11-20)
+- Stream forensics: SSE-embedded provider failures (`response.incomplete`,
+  `response.failed`, mid-stream `error` events, chat-dialect error objects)
+  are no longer silently dropped. "stream produced no content" now reports
+  the provider's own reason plus an event tally of what actually arrived
+  (e.g. `provider said: max_output_tokens [events: think_deltax812,
+  incomplete x1]`). Field symptom: intermittent empty replies on the
+  responses API with thinking=high.
+
 ## v3.6d (2026-11-20)
 - New `/rounds <2..100>` command: tool-call budget per reply (default 30),
   live + persisted to settings.txt (was file-edit-only)

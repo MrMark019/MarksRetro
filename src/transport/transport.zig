@@ -725,6 +725,35 @@ const StreamAccum = struct {
     usage_in: u64 = 0,
     usage_out: u64 = 0,
     open_block: u32 = 0,
+    // Fork v3.6e: stream forensics. The field showed "stream produced no
+    // content" with zero clues - provider errors that arrive INSIDE the SSE
+    // stream (response.incomplete / response.failed / error events) were
+    // silently dropped. Now every notable event is counted, and failure
+    // reasons are surfaced verbatim in the error text.
+    ev_names: [10]?[]const u8 = [_]?[]const u8{null} ** 10,
+    ev_counts: [10]u32 = [_]u32{0} ** 10,
+    ev_len: usize = 0,
+    fail: []const u8 = "", // heap-owned (only when len>0); provider's own words
+
+    fn observe(self: *StreamAccum, name: []const u8) void {
+        var i: usize = 0;
+        while (i < self.ev_len) : (i += 1) {
+            if (std.mem.eql(u8, self.ev_names[i].?, name)) {
+                self.ev_counts[i] += 1;
+                return;
+            }
+        }
+        if (self.ev_len < self.ev_names.len) {
+            self.ev_names[self.ev_len] = name; // static literals only
+            self.ev_counts[self.ev_len] = 1;
+            self.ev_len += 1;
+        }
+    }
+
+    fn setFail(self: *StreamAccum, msg: []const u8) void {
+        if (self.fail.len > 0) return; // first failure wins
+        self.fail = self.allocator.dupe(u8, msg) catch "";
+    }
 
     fn toolSlot(self: *StreamAccum, idx_in: usize) *PartialTool {
         var idx = idx_in;
@@ -828,6 +857,7 @@ fn streamCall(
     };
     defer acc.text.deinit(allocator);
     defer acc.thinking.deinit(allocator);
+    defer if (acc.fail.len > 0) allocator.free(acc.fail);
 
     // ── SSE loop (line-based, zero-copy through Client.Reader) ──
     // Big transfer buffer: responses-style "response.completed" lines are one
@@ -924,12 +954,38 @@ fn streamCall(
 
     if (read_err) |e| {
         std.log.err("stream read error: {s}", .{@errorName(e)});
-        const msg = try allocator.dupe(u8, "Error: connection dropped mid-response. Try again.");
+        const msg = streamFailMsg(allocator, &acc, "Error: connection dropped mid-response (read error).") catch "Error: connection dropped mid-response.";
         return agent.AgentResponse{ .text = msg, .done = true };
     }
 
-    const msg = try allocator.dupe(u8, "Error: stream produced no content (empty response).");
-    return agent.AgentResponse{ .text = msg, .done = true };
+    {
+        // Fork v3.6e: never again a bare "no content" - the error text now
+        // carries the provider's own failure reason plus an event tally of
+        // what the SSE stream actually contained.
+        const msg = streamFailMsg(allocator, &acc, "Error: stream produced no content.") catch "Error: stream produced no content (empty response).";
+        return agent.AgentResponse{ .text = msg, .done = true };
+    }
+}
+
+/// v3.6e: build "base + provider said + events seen" diagnostic text.
+fn streamFailMsg(allocator: std.mem.Allocator, acc: *StreamAccum, base: []const u8) ![]const u8 {
+    var list = std.ArrayList(u8).initCapacity(allocator, base.len + 192) catch return error.OutOfMemory;
+    errdefer list.deinit(allocator);
+    const w = list.writer(allocator);
+    w.print("{s}", .{base}) catch {};
+    if (acc.fail.len > 0) {
+        const cut = if (acc.fail.len > 220) acc.fail[0..220] else acc.fail;
+        w.print(" provider said: {s}", .{cut}) catch {};
+    }
+    if (acc.ev_len > 0) {
+        w.print(" [events:", .{}) catch {};
+        var i: usize = 0;
+        while (i < acc.ev_len) : (i += 1) {
+            if (acc.ev_names[i]) |nm| w.print(" {s}x{d}", .{ nm[0..@min(nm.len, 12)], acc.ev_counts[i] }) catch {};
+        }
+        w.print("]", .{}) catch {};
+    }
+    return list.toOwnedSlice(allocator);
 }
 
 fn handleSseEvent(acc: *StreamAccum, sink: ?*const Sink, payload: []const u8) !void {
@@ -952,12 +1008,14 @@ fn handleOpenAIStreamEvent(acc: *StreamAccum, sink: ?*const Sink, root: std.json
         if (tv == .string) {
             const t = tv.string;
             if (std.mem.eql(u8, t, "response.output_text.delta")) {
+                acc.observe("text_delta");
                 if (root.get("delta")) |d| if (d == .string) {
                     try acc.text.appendSlice(alloc, d.string);
                     Sink.text(sink, d.string, acc.text.items.len > d.string.len, true);
                 };
                 return;
             } else if (std.mem.eql(u8, t, "response.reasoning_summary_text.delta") or std.mem.eql(u8, t, "response.output_text.reasoning.delta")) {
+                acc.observe("think_delta");
                 if (root.get("delta")) |d| if (d == .string) {
                     try acc.thinking.appendSlice(alloc, d.string);
                     Sink.thinking(sink, d.string, acc.thinking.items.len > d.string.len, true);
@@ -985,6 +1043,7 @@ fn handleOpenAIStreamEvent(acc: *StreamAccum, sink: ?*const Sink, root: std.json
                 };
                 return;
             } else if (std.mem.eql(u8, t, "response.completed")) {
+                acc.observe("completed");
                 if (root.get("response")) |r| if (r == .object) {
                     if (r.object.get("usage")) |u| if (u == .object) {
                         if (u.object.get("input_tokens")) |v| { if (v == .integer) acc.usage_in = @intCast(@max(v.integer, 0)); }
@@ -992,8 +1051,46 @@ fn handleOpenAIStreamEvent(acc: *StreamAccum, sink: ?*const Sink, root: std.json
                     };
                 };
                 return;
+            } else if (std.mem.eql(u8, t, "response.incomplete")) {
+                // stream ended early by the provider's own decision - the
+                // reason is the diagnosis we used to never see
+                acc.observe("incomplete");
+                if (root.get("response")) |r| if (r == .object) {
+                    if (r.object.get("incomplete_details")) |id| if (id == .object) {
+                        if (id.object.get("reason")) |rs| if (rs == .string) acc.setFail(rs.string);
+                    };
+                };
+                return;
+            } else if (std.mem.eql(u8, t, "response.failed")) {
+                acc.observe("failed");
+                if (root.get("response")) |r| if (r == .object) {
+                    if (r.object.get("error")) |e| {
+                        if (e == .object) {
+                            if (e.object.get("message")) |m| if (m == .string) acc.setFail(m.string);
+                        }
+                        if (e == .string) acc.setFail(e.string);
+                    }
+                };
+                return;
+            } else if (std.mem.eql(u8, t, "error")) {
+                acc.observe("error");
+                if (root.get("message")) |m| if (m == .string) acc.setFail(m.string);
+                if (root.get("error")) |e| if (e == .object) {
+                    if (e.object.get("message")) |m| if (m == .string) acc.setFail(m.string);
+                };
+                return;
             }
         }
+    }
+
+    // chat dialect / gateways: top-level {"error": {...}} mid-stream event
+    if (root.get("error")) |e| {
+        acc.observe("error");
+        if (e == .object) {
+            if (e.object.get("message")) |m| if (m == .string) acc.setFail(m.string);
+        }
+        if (e == .string) acc.setFail(e.string);
+        return;
     }
 
     // chat completions dialect: choices[0].delta
